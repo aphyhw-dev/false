@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>저울로 가짜 동전 찾기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.js"></script>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    body { background: #f8fafc; font-family: 'Pretendard', sans-serif; overflow-x: hidden; }
+    .balance-beam { transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+    .tray-container { transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+    
+    /* 모바일 스크롤 방해 요소 완전 제거 및 클릭 위주 조작으로 개선 */
+    .coin {
+      background: radial-gradient(circle at 30% 30%, #fbbf24, #d97706);
+      border: 2px solid #92400e; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; color: #78350f; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      user-select: none; transition: transform 0.1s, box-shadow 0.2s; position: relative; z-index: 50;
+    }
+    .coin-normal { width: 44px; height: 44px; font-size: 14px; }
+    .coin-small { width: 32px; height: 32px; font-size: 11px; border-width: 1px; }
+    .coin-tiny { width: 24px; height: 24px; font-size: 9px; border-width: 1px; }
+    
+    .coin.dragging { opacity: 0.5; transform: scale(1.1); }
+    
+    /* 다중 선택 기능 스타일 */
+    .coin.selected-coin {
+      border-color: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4); transform: scale(1.05); z-index: 60;
+    }
+    
+    .tray-base { 
+      width: 100%; min-height: 110px; border-radius: 0 0 40% 40% / 0 0 100% 100%;
+      background: linear-gradient(to bottom, #ffffff, #f1f5f9); border: 2px dashed #cbd5e1; transition: all 0.3s;
+      cursor: pointer;
+    }
+    .tray-base.drag-over { border-color: #4f46e5; background: #eef2ff; border-style: solid; }
+    
+    .builder-btn { transition: all 0.2s; border: 2px solid #e2e8f0; background: white; padding: 12px 8px; font-size: 0.95rem; font-weight: 700; border-radius: 12px; width: 100%; }
+    .builder-btn.selected { border-color: #4f46e5; background: #4f46e5; color: white; }
+    .math-box {
+      min-width: 75px; height: 50px; background: white; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center; font-weight: 800; border: 2px solid #e2e8f0; font-size: 1.3rem;
+    }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+    .shake { animation: shake 0.3s ease-in-out; border-color: #ef4444 !important; }
+    .level-tab { padding: 8px 12px; font-size: 12px; font-weight: 800; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+    .level-tab.active { background: #1e293b; color: white; }
+    .level-tab:not(.active) { background: #e2e8f0; color: #64748b; }
+    
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+  </style>
+</head>
+<body class="p-4 md:p-8">
+
+  <div class="max-w-2xl mx-auto">
+    <header class="mb-6 flex flex-col gap-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
+        <div class="flex items-center gap-3">
+          <h1 class="text-2xl font-black text-slate-900">⚖️ 저울로 가짜 동전 찾기</h1>
+          <div class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-sm font-bold shadow-sm border border-indigo-200">
+            측정 횟수 : <span id="measureCount" class="text-indigo-900 text-lg">0</span>번
+          </div>
+        </div>
+        <div class="flex gap-1 bg-slate-200 p-1 rounded-xl overflow-x-auto custom-scrollbar">
+          <div onclick="startGame(3, this)" class="level-tab">3개</div>
+          <div onclick="startGame(9, this)" class="level-tab active">9개</div>
+          <div onclick="startGame(12, this)" class="level-tab">12개</div>
+          <div onclick="startGame(27, this)" class="level-tab">27개</div>
+          <div onclick="startGame(81, this)" class="level-tab text-rose-600">81개(심화)</div>
+        </div>
+      </div>
+      <p id="topConstraint" class="text-indigo-600 text-[13px] font-bold mt-2"></p>
+    </header>
+
+    <div class="bg-white rounded-[40px] p-6 md:p-8 shadow-2xl border border-slate-100 relative">
+      <!-- 조작 안내 힌트 -->
+      <div class="text-center mb-2">
+        <span class="text-[11px] md:text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">💡 동전을 터치해 선택한 뒤, 빈 접시나 보관함을 터치해 이동하세요!</span>
+      </div>
+
+      <!-- 저울 비주얼 -->
+      <div class="relative h-[240px] mb-8 flex items-center justify-center">
+        <div id="beam" class="balance-beam relative w-full h-2 bg-slate-400 rounded-full z-10 flex items-center justify-between">
+          <div id="leftTrayWrap" class="tray-container absolute left-0 -top-1 w-36 flex flex-col items-center origin-top transform -translate-x-1/2">
+             <div class="h-12 w-0.5 bg-slate-300"></div>
+             <div id="trayL" onclick="moveSelectedTo('trayL')" ondragover="event.preventDefault()" ondrop="drop(event, 'trayL')" ondragenter="this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" class="tray-base w-full p-2 flex flex-wrap justify-center content-start gap-1 shadow-inner"></div>
+             <span class="text-[10px] font-bold text-slate-400 mt-2 uppercase">Left</span>
+          </div>
+          <div id="rightTrayWrap" class="tray-container absolute right-0 -top-1 w-36 flex flex-col items-center origin-top transform translate-x-1/2">
+             <div class="h-12 w-0.5 bg-slate-300"></div>
+             <div id="trayR" onclick="moveSelectedTo('trayR')" ondragover="event.preventDefault()" ondrop="drop(event, 'trayR')" ondragenter="this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" class="tray-base w-full p-2 flex flex-wrap justify-center content-start gap-1 shadow-inner"></div>
+             <span class="text-[10px] font-bold text-slate-400 mt-2 uppercase">Right</span>
+          </div>
+        </div>
+        <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-20 bg-slate-100 z-0 rounded-t-3xl border-t-4 border-slate-200"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-slate-800 rounded-full z-20 shadow-lg"></div>
+      </div>
+
+      <!-- 동전 주머니 -->
+      <div class="bg-slate-50 p-5 rounded-3xl mb-6 border-2 border-dashed border-slate-200 relative cursor-pointer" onclick="moveSelectedTo('bag')" ondragover="event.preventDefault()" ondrop="drop(event, 'bag')">
+        <span class="absolute -top-3 left-4 bg-white px-2 text-xs font-bold text-slate-400">보관함</span>
+        <div id="bag" class="flex flex-wrap justify-center gap-1.5 min-h-[60px] max-h-[160px] overflow-y-auto custom-scrollbar"></div>
+      </div>
+
+      <!-- 제어 버튼 -->
+      <div class="flex flex-col gap-2 mb-8">
+        <div class="grid grid-cols-2 gap-4">
+          <button id="compareBtn" onclick="compare()" class="py-5 bg-indigo-600 text-white rounded-2xl font-black text-xl shadow-xl hover:bg-indigo-700 transition-all">측정하기</button>
+          <button id="idBtn" onclick="toggleIdentify()" class="py-5 bg-emerald-500 text-white rounded-2xl font-black text-xl shadow-xl hover:bg-emerald-600 transition-all">가짜 지목</button>
+        </div>
+        <button onclick="recallAllCoins()" class="py-2 bg-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-300 transition-all">모든 동전 회수하기</button>
+      </div>
+
+      <!-- 퀴즈 영역 -->
+      <div id="quizZone" class="bg-slate-50 p-6 rounded-3xl border-2 border-slate-200 min-h-[200px]">
+        <div id="prompt" class="text-center py-12 text-slate-400 font-bold">동전을 올리고 측정 버튼을 누르세요.</div>
+        
+        <!-- Step 1: 가짜 위치 판단 -->
+        <div id="step1" class="hidden">
+          <h3 class="font-black text-slate-800 text-center mb-6 text-lg">가짜 동전이 어디에 있나요?</h3>
+          <div class="grid grid-cols-3 gap-3">
+             <button onclick="verifyStep1('L')" class="builder-btn">왼쪽 저울</button>
+             <button onclick="verifyStep1('R')" class="builder-btn">오른쪽 저울</button>
+             <button onclick="verifyStep1('OUT')" class="builder-btn">저울 바깥</button>
+          </div>
+        </div>
+
+        <!-- Step 2: 식 표현 -->
+        <div id="step2" class="hidden">
+          <h3 class="font-black text-slate-800 text-center mb-4 text-lg">저울의 상태를 식으로 나타내세요.</h3>
+          <div class="flex items-center justify-center gap-3 mb-6">
+             <div id="mathL" class="math-box text-indigo-600">?</div>
+             <div id="mathOp" class="math-box text-slate-800">?</div>
+             <div id="mathR" class="math-box text-indigo-600">?</div>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+             <div id="btnsL" class="flex flex-col gap-2"></div>
+             <div id="btnsOp" class="flex flex-col gap-2"></div>
+             <div id="btnsR" class="flex flex-col gap-2"></div>
+          </div>
+          <button id="verifyBtn" onclick="verifyStep2()" class="w-full py-4 bg-slate-900 text-white rounded-2xl font-black mt-6 transition-all active:scale-95">식 확인</button>
+        </div>
+
+        <!-- Step 3: 성질 점검 -->
+        <div id="step3" class="hidden">
+           <div class="bg-indigo-900 text-white p-5 rounded-2xl mb-4">
+              <p class="text-[10px] font-black text-indigo-300 uppercase mb-2">원리 점검</p>
+              <div id="step3Statement" class="text-xl font-bold text-center leading-relaxed"></div>
+           </div>
+           <div class="space-y-3">
+              <p id="step3Question" class="text-sm font-bold text-slate-600 text-center"></p>
+              <button id="propBtn1" class="w-full py-4 px-4 bg-white border-2 border-slate-200 rounded-xl text-sm font-bold hover:border-indigo-500 text-left transition-all"></button>
+              <button id="propBtn2" class="w-full py-4 px-4 bg-white border-2 border-slate-200 rounded-xl text-sm font-bold hover:border-indigo-500 text-left transition-all"></button>
+           </div>
+        </div>
+
+        <!-- 피드백 -->
+        <div id="feedback" class="hidden text-center py-6">
+           <div class="text-emerald-600 font-black text-2xl mb-4">정답입니다! 👏</div>
+           <button onclick="resetBalanceAndUI()" class="py-3 px-8 bg-indigo-600 text-white rounded-xl font-bold hover:scale-105 transition-all">다음 측정 계속하기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 가짜 지목 오버레이 -->
+  <div id="idOverlay" class="hidden fixed inset-0 bg-emerald-500/10 z-[100] pointer-events-none flex items-center justify-center">
+    <div class="bg-emerald-600 text-white px-8 py-4 rounded-full font-black shadow-2xl pointer-events-auto">가짜라고 생각하는 동전을 클릭!</div>
+  </div>
+
+  <!-- 결과 모달 -->
+  <div id="modal" class="fixed inset-0 bg-slate-900/80 hidden items-center justify-center z-[200] p-6">
+    <div class="bg-white rounded-[40px] p-10 text-center max-w-sm w-full">
+      <div id="mIcon" class="text-7xl mb-4"></div>
+      <h2 id="mTitle" class="text-3xl font-black mb-2"></h2>
+      <p id="mBody" class="text-slate-500 mb-8 font-medium"></p>
+      <button id="modalBtn" class="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-lg">새 게임 시작</button>
+    </div>
+  </div>
+
+  <script>
+    let game = { 
+      n: 9, 
+      fake: -1, 
+      targetMode: false, 
+      quiz: null, 
+      ans: { l: null, op: null, r: null },
+      wReal: 10,
+      wFake: 7,
+      measureCount: 0
+    };
+
+    function startGame(n, el) {
+      if(el) { 
+        document.querySelectorAll('.level-tab').forEach(t => t.classList.remove('active')); 
+        el.classList.add('active'); 
+      }
+      game.n = n;
+      game.fake = Math.floor(Math.random() * n);
+      game.measureCount = 0;
+      document.getElementById('measureCount').innerText = game.measureCount;
+
+      const bag = document.getElementById('bag');
+      document.getElementById('trayL').innerHTML = '';
+      document.getElementById('trayR').innerHTML = '';
+      bag.innerHTML = '';
+      
+      let sizeClass = 'coin-normal';
+      if (n >= 81) sizeClass = 'coin-tiny';
+      else if (n >= 27) sizeClass = 'coin-small';
+
+      for(let i=0; i<n; i++) {
+        const c = document.createElement('div');
+        c.className = `coin ${sizeClass} pointer-events-auto`; 
+        c.id = `coin-${i}`; 
+        c.innerText = i + 1; 
+        c.draggable = true;
+        
+        c.addEventListener('dragstart', e => { 
+          if (!c.classList.contains('selected-coin')) {
+            clearSelection();
+            c.classList.add('selected-coin');
+          }
+          e.dataTransfer.setData('text', 'multi-drag'); 
+          c.classList.add('dragging'); 
+        });
+        c.addEventListener('dragend', () => c.classList.remove('dragging'));
+        
+        c.onclick = (e) => { 
+          if(game.targetMode) {
+            finish(i); 
+          } else {
+            e.stopPropagation(); 
+            c.classList.toggle('selected-coin');
+          }
+        };
+        bag.appendChild(c);
+      }
+      
+      // 단, x < a 조건문 제거 반영됨
+      renderLatex("topConstraint", "진짜 동전의 무게를 $a$, 가짜 동전의 무게를 $x$라고 하자.");
+      resetBalanceAndUI();
+    }
+
+    function clearSelection() {
+      document.querySelectorAll('.selected-coin').forEach(el => el.classList.remove('selected-coin'));
+    }
+
+    function moveSelectedTo(targetId) {
+      if (document.getElementById('compareBtn').disabled) return; 
+      const selected = document.querySelectorAll('.selected-coin');
+      const target = document.getElementById(targetId);
+      if (selected.length > 0 && target) {
+        selected.forEach(el => {
+          target.appendChild(el);
+          el.classList.remove('selected-coin');
+        });
+      }
+    }
+
+    function recallAllCoins() {
+      if (document.getElementById('compareBtn').disabled) resetBalanceAndUI();
+      const bag = document.getElementById('bag');
+      document.querySelectorAll('.coin').forEach(c => {
+        bag.appendChild(c);
+        c.classList.remove('selected-coin');
+      });
+    }
+
+    function drop(e, tid) {
+      e.preventDefault();
+      document.getElementById(tid).classList.remove('drag-over');
+      
+      const target = document.getElementById(tid);
+      if (target) {
+        const selected = document.querySelectorAll('.selected-coin');
+        selected.forEach(el => {
+          target.appendChild(el);
+          el.classList.remove('selected-coin');
+        });
+        
+        if (document.getElementById('compareBtn').disabled) {
+           resetBalanceAndUI();
+        }
+      }
+    }
+
+    function resetBalanceAndUI() {
+      const b = document.getElementById('beam'), l = document.getElementById('leftTrayWrap'), r = document.getElementById('rightTrayWrap');
+      b.style.transform = 'rotate(0deg)'; l.style.transform = 'translateX(-50%) rotate(0deg)'; r.style.transform = 'translateX(50%) rotate(0deg)';
+      document.getElementById('compareBtn').disabled = false;
+      document.getElementById('compareBtn').style.opacity = "1";
+      document.getElementById('prompt').classList.remove('hidden');
+      document.getElementById('step1').classList.add('hidden');
+      document.getElementById('step2').classList.add('hidden');
+      document.getElementById('step3').classList.add('hidden');
+      document.getElementById('feedback').classList.add('hidden');
+      game.ans = { l: null, op: null, r: null };
+      clearSelection();
+    }
+
+    function compare() {
+      const lNodes = Array.from(document.getElementById('trayL').children);
+      const rNodes = Array.from(document.getElementById('trayR').children);
+      if(lNodes.length + rNodes.length === 0) return;
+
+      game.measureCount++;
+      document.getElementById('measureCount').innerText = game.measureCount;
+
+      const hasL = lNodes.some(c => parseInt(c.id.split('-')[1]) === game.fake);
+      const hasR = rNodes.some(c => parseInt(c.id.split('-')[1]) === game.fake);
+      
+      const lw = lNodes.reduce((s, c) => s + (parseInt(c.id.split('-')[1]) === game.fake ? game.wFake : game.wReal), 0);
+      const rw = rNodes.reduce((s, c) => s + (parseInt(c.id.split('-')[1]) === game.fake ? game.wFake : game.wReal), 0);
+
+      let angle = 0, op = '=';
+      
+      if (lw < rw) {
+        angle = 15; 
+        op = '<';
+      } else if (lw > rw) {
+        angle = -15; 
+        op = '>';
+      } else {
+        angle = 0;
+        op = '=';
+      }
+
+      game.quiz = { lc: lNodes.length, rc: rNodes.length, hasL, hasR, op };
+
+      document.getElementById('beam').style.transform = `rotate(${angle}deg)`;
+      document.getElementById('leftTrayWrap').style.transform = `translateX(-50%) rotate(${-angle}deg)`;
+      document.getElementById('rightTrayWrap').style.transform = `translateX(50%) rotate(${-angle}deg)`;
+
+      document.getElementById('compareBtn').disabled = true;
+      document.getElementById('compareBtn').style.opacity = "0.4";
+      document.getElementById('prompt').classList.add('hidden');
+      document.getElementById('step1').classList.remove('hidden');
+    }
+
+    function verifyStep1(choice) {
+      const q = game.quiz;
+      let isCorrect = false;
+
+      // 가짜 동전의 실제 위치와 사용자 선택 일치 검증
+      if(q.hasL && choice === 'L') isCorrect = true; 
+      else if(q.hasR && choice === 'R') isCorrect = true;
+      else if(!q.hasL && !q.hasR && choice === 'OUT') isCorrect = true;
+
+      if(isCorrect) {
+        document.getElementById('step1').classList.add('hidden');
+        document.getElementById('step2').classList.remove('hidden');
+        initMathStep();
+      } else { 
+        shake(); 
+      }
+    }
+
+    function initMathStep() {
+      const q = game.quiz;
+      const getOpts = (cnt, hasFake) => {
+        if(cnt === 0) return ["0"];
+        
+        let expectedReal = (cnt === 1) ? "a" : `${cnt}a`;
+        let expectedFake;
+        if (cnt === 1) {
+          expectedFake = "x";
+        } else if (cnt === 2) {
+          expectedFake = "a+x";
+        } else {
+          expectedFake = `${cnt-1}a+x`;
+        }
+        
+        let base = [expectedReal];
+        if (cnt > 0) base.push(expectedFake);
+        
+        return [...new Set(base)];
+      };
+      
+      const render = (gid, opts, key) => {
+        const div = document.getElementById(gid); div.innerHTML = '';
+        opts.forEach(o => {
+          const btn = document.createElement('button'); btn.className = "builder-btn"; btn.innerText = o;
+          btn.onclick = () => {
+            game.ans[key] = o;
+            Array.from(div.children).forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            updateMath();
+          };
+          div.appendChild(btn);
+        });
+      };
+
+      render('btnsL', getOpts(q.lc, q.hasL), 'l');
+      render('btnsOp', ['<', '>', '='], 'op');
+      render('btnsR', getOpts(q.rc, q.hasR), 'r');
+      updateMath();
+    }
+
+    function updateMath() {
+      const draw = (id, val) => {
+        const el = document.getElementById(id);
+        if(!val) el.innerText = '?'; else katex.render(val.replace('<','\\lt').replace('>','\\gt'), el);
+      };
+      draw('mathL', game.ans.l); draw('mathOp', game.ans.op); draw('mathR', game.ans.r);
+    }
+
+    function verifyStep2() {
+      const q = game.quiz, a = game.ans;
+      
+      const checkSide = (val, cnt, hasFake) => {
+        if(cnt === 0) return val === "0";
+        
+        let expected = "";
+        if (hasFake) {
+          if (cnt === 1) expected = "x";
+          else if (cnt === 2) expected = "a+x";
+          else expected = `${cnt-1}a+x`;
+        } else {
+          if (cnt === 1) expected = "a";
+          else expected = `${cnt}a`;
+        }
+        return val === expected;
+      };
+
+      if(checkSide(a.l, q.lc, q.hasL) && checkSide(a.r, q.rc, q.hasR) && a.op === q.op) {
+        document.getElementById('step2').classList.add('hidden');
+        
+        document.getElementById('step3').classList.remove('hidden');
+        const formula = `${a.l} ${a.op === '>' ? '\\gt' : (a.op === '<' ? '\\lt' : '=')} ${a.r}`;
+        katex.render(formula, document.getElementById('step3Statement'));
+        
+        const qEl = document.getElementById('step3Question');
+        const b1 = document.getElementById('propBtn1');
+        const b2 = document.getElementById('propBtn2');
+        
+        if (a.op === '=') {
+          qEl.innerText = "이 결과에서 적용된 등식의 성질은 무엇인가요?";
+          b1.innerText = "등식의 양변에 같은 수를 더하거나 빼도 등식은 성립한다.";
+          b1.onclick = () => verifyStep3(true);
+          b2.innerText = "등식의 양변에 0을 곱하면 0이 된다.";
+          b2.onclick = () => verifyStep3(false);
+        } else {
+          qEl.innerText = "이 결과가 성립하는 이유는 부등식의 어떤 성질 때문인가요?";
+          b1.innerText = "부등식의 양변에 같은 수를 더하거나 빼도 부등호 방향은 바뀌지 않는다.";
+          b1.onclick = () => verifyStep3(true);
+          b2.innerText = "부등식의 양변에 음수를 곱하거나 나누면 부등호 방향이 바뀐다.";
+          b2.onclick = () => verifyStep3(false);
+        }
+      } else { shake(); }
+    }
+
+    function verifyStep3(isCorrect) {
+      if (isCorrect) {
+        document.getElementById('step3').classList.add('hidden');
+        document.getElementById('feedback').classList.remove('hidden');
+      } else {
+        alert("이 실험은 저울 양변에 진짜 동전들을 더 올리는 상황을 나타냅니다. 덧셈과 관련된 성질을 생각해보세요.");
+      }
+    }
+
+    function toggleIdentify() {
+      game.targetMode = !game.targetMode;
+      document.getElementById('idBtn').innerText = game.targetMode ? "지목 취소" : "가짜 지목";
+      document.getElementById('idOverlay').classList.toggle('hidden', !game.targetMode);
+    }
+
+    function finish(idx) {
+      const win = (idx === game.fake);
+      const m = document.getElementById('modal');
+      const btn = document.getElementById('modalBtn');
+      
+      if (win) {
+        document.getElementById('mIcon').innerText = "🏆";
+        document.getElementById('mTitle').innerText = "정답입니다!";
+        document.getElementById('mBody').innerHTML = `가짜 동전을 찾아냈습니다!<br>총 <b>${game.measureCount}번</b> 측정했습니다.`;
+        btn.innerText = "새 게임 시작";
+        btn.onclick = () => { m.style.display = 'none'; startGame(game.n, document.querySelector('.level-tab.active')); };
+        toggleIdentify(); 
+      } else {
+        document.getElementById('mIcon').innerText = "🧐";
+        document.getElementById('mTitle').innerText = "오답입니다.";
+        document.getElementById('mBody').innerText = "선택한 동전은 가짜가 아닙니다. 다시 찾아보세요!";
+        btn.innerText = "다시 지목하기";
+        btn.onclick = () => { m.style.display = 'none'; };
+      }
+      
+      m.style.display = 'flex';
+    }
+
+    function shake() { const z = document.getElementById('quizZone'); z.classList.add('shake'); setTimeout(() => z.classList.remove('shake'), 300); }
+
+    function renderLatex(id, text) {
+      const el = document.getElementById(id);
+      el.innerHTML = text.replace(/\$(.*?)\$/g, (match, formula) => {
+        try { return katex.renderToString(formula); } catch (e) { return match; }
+      });
+    }
+
+    window.onload = () => startGame(9);
+  </script>
+</body>
+</html>
